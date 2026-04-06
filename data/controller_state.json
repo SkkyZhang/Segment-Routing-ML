@@ -3,7 +3,7 @@
   "traffic_profile": "medium",
   "active_policy": "srte_ml_dynamic",
   "policy_id": "ml_policy_initial",
-  "candidate_path_id": "upper_corridor",
+  "candidate_path_id": "lower_corridor",
   "policy_seq": 1,
   "decision_id": "ml_bootstrap",
   "reroute_event": 0,

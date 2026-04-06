@@ -10,6 +10,7 @@ The project implements a closed-loop workflow:
 - validate that path choices react consistently to injected congestion.
 
 The current version uses an **8-router topology** with two corridor paths and one middle cross-link.
+The recommended workflow in this repository is now explicitly centered on a **60-second prediction horizon**.
 
 ## Overview
 
@@ -63,10 +64,12 @@ Candidate path definitions live in:
     ├── check_connectivity.sh        # topology and OSPF health checks
     ├── check_paths.sh               # path-level reachability checks
     ├── check_experiment_data.py     # validate collected runs
+    ├── summarize_experiment_results.py # summarize igp/static/ml_dynamic baselines
     ├── build_topk_dataset.py        # build Top-K elephant datasets
     ├── build_dataset_only.py        # build dataset_full.csv without training
     ├── analyze_path_choices.py      # replay decider decisions over a dataset
     ├── validate_decider_output.py   # logical consistency checker for decisions
+    ├── apply_decision.py            # apply chosen path as FRR static-route actions
     ├── plot_topology.py             # draw topology and selected path
     └── force_upper_congestion_test.sh # reusable congestion-injection validation
 ```
@@ -221,7 +224,7 @@ python3 scripts/check_experiment_data.py --data-dir data
 
 ## Step 3: Train the ML Model
 
-Train a 60-second future MLU predictor:
+Train the recommended 60-second future MLU predictor:
 
 ```bash
 python3 ML.py \
@@ -232,9 +235,10 @@ python3 ML.py \
   --model auto
 ```
 
-Recommended for this project today:
-- use `60s` as the main prediction horizon,
-- because current data volume is sufficient for `60s`, but still limited for longer horizons.
+Recommended baseline for this project:
+- use `60s` as the main and only reporting horizon,
+- because the current dataset is strongest and most stable at `60s`,
+- and this keeps the project aligned around one clear experimental story.
 
 Main outputs:
 - `dataset_full.csv`
@@ -302,7 +306,102 @@ python3 scripts/plot_topology.py \
   --output data/topology_cross.png
 ```
 
-## Step 6: Replay and Analyze Path Choices
+## Step 6: Apply the Decision to the Running Lab
+
+This repository currently realizes the selected SR-TE corridor as hop-by-hop
+FRR static routes rather than native MPLS/SRv6 policy programming.
+
+Preview the generated router actions first:
+
+```bash
+python3 scripts/apply_decision.py \
+  --decision-json data/ml_results/decision_latest.json \
+  --paths-json candidate_paths_example.json \
+  --lab lab.clab.yml \
+  --dry-run
+```
+
+Apply the chosen path to the running lab:
+
+```bash
+python3 scripts/apply_decision.py \
+  --decision-json data/ml_results/decision_latest.json \
+  --paths-json candidate_paths_example.json \
+  --lab lab.clab.yml
+```
+
+The script:
+- reads `chosen_candidate_path_id`,
+- converts the path into per-hop next hops,
+- removes previously managed static routes for the destination prefix,
+- installs new FRR static routes for `192.168.8.0/24`,
+- optionally installs reverse routes for `192.168.1.0/24`.
+
+## Live Apply and Route Validation
+
+After applying a decision, verify that the selected corridor is really active in
+the live FRR route tables.
+
+### Example A: Apply the latest decider result
+
+```bash
+python3 scripts/apply_decision.py \
+  --decision-json data/ml_results/decision_latest.json \
+  --paths-json candidate_paths_example.json \
+  --lab lab.clab.yml \
+  --out-json data/ml_results/apply_decision_live.json
+```
+
+### Example B: Force the lower corridor for a reverse validation test
+
+```bash
+python3 scripts/apply_decision.py \
+  --path-id lower_corridor \
+  --paths-json candidate_paths_example.json \
+  --lab lab.clab.yml \
+  --out-json data/ml_results/apply_decision_lower_live.json
+```
+
+### Verify the active route in FRR
+
+Check the destination prefixes on all routers:
+
+```bash
+for c in r1 r2 r3 r4 r5 r6 r7 r8; do
+  echo "=== $c ==="
+  sudo docker exec clab-srte8-$c vtysh \
+    -c 'show ip route 192.168.8.0/24' \
+    -c 'show ip route 192.168.1.0/24'
+done
+```
+
+How to interpret the output:
+- if `upper_corridor` is active, the best static path to `192.168.8.0/24` should follow:
+  - `r1 -> 10.0.12.2`
+  - `r2 -> 10.0.23.2`
+  - `r3 -> 10.0.34.2`
+  - `r4 -> 10.0.48.2`
+- if `lower_corridor` is active, the best static path to `192.168.8.0/24` should follow:
+  - `r1 -> 10.0.15.2`
+  - `r5 -> 10.0.56.2`
+  - `r6 -> 10.0.67.2`
+  - `r7 -> 10.0.78.2`
+
+Reverse validation for `192.168.1.0/24` should mirror the selected corridor from
+`r8` back toward `r1`.
+
+### Optional host-side check
+
+```bash
+sudo docker exec clab-srte8-h1 ip route get 192.168.8.2
+sudo docker exec clab-srte8-h2 ip route get 192.168.1.2
+```
+
+Note:
+- host-side checks only confirm the local default gateway hop,
+- the decisive proof of corridor selection is the per-router FRR route table.
+
+## Step 7: Replay and Analyze Path Choices
 
 Replay the decider over a whole dataset and count chosen paths:
 
@@ -326,7 +425,35 @@ Outputs:
 
 This is useful to show that the decider is not simply returning one path all the time.
 
-## Step 7: Validate a Decision
+## Step 8: Summarize Baseline Results
+
+To compare `igp`, `static`, and `ml_dynamic` in one place, run:
+
+```bash
+python3 scripts/summarize_experiment_results.py \
+  --data-dir data \
+  --ml-output-dir data/ml_results \
+  --output-dir data/experiment_summary
+```
+
+Outputs:
+- `baseline_run_summary.csv`
+- `baseline_mode_summary.csv`
+- `ml_metrics_overall.csv`
+- `ml_metrics_by_mode.csv`
+- `baseline_mlu_max_by_mode.png`
+- `baseline_rtt_p99_by_mode.png`
+- `baseline_loss_by_mode.png`
+- `baseline_path_changes_by_mode.png`
+
+This script is the recommended way to produce a concise baseline comparison for:
+- maximum link utilization,
+- probe RTT,
+- loss,
+- path-change overhead,
+- and ML performance by mode.
+
+## Step 9: Validate a Decision
 
 Validate that a decider output is logically self-consistent:
 
@@ -342,7 +469,7 @@ This checks whether:
 - the chosen score and recorded score match,
 - the result is internally consistent.
 
-## Congestion Injection Experiments
+## Step 10: Congestion Injection Experiments
 
 The repository includes a reusable congestion-injection script:
 
@@ -459,7 +586,7 @@ bash scripts/run_experiment.sh ml run1
 python3 scripts/check_experiment_data.py --data-dir data
 ```
 
-5. Train the ML model
+5. Train the 60-second ML model
 ```bash
 python3 ML.py --data-dir data --output-dir data/ml_results --target-col network_mlu_pct --horizons 60 --model auto
 ```
@@ -469,18 +596,36 @@ python3 ML.py --data-dir data --output-dir data/ml_results --target-col network_
 python3 srte_decider.py --dataset data/ml_results/dataset_full.csv --model data/ml_results/model_network_mlu_pct_60s.joblib --paths-json candidate_paths_example.json --state-file data/controller_state.json --lab lab.clab.yml --out-json data/ml_results/decision_latest.json
 ```
 
-7. Validate the decision and plot it
+7. Apply the decision to the lab
+```bash
+python3 scripts/apply_decision.py --decision-json data/ml_results/decision_latest.json --paths-json candidate_paths_example.json --lab lab.clab.yml --dry-run
+```
+
+8. Validate the active route in the live lab
+```bash
+for c in r1 r2 r3 r4 r5 r6 r7 r8; do
+  echo "=== $c ==="
+  sudo docker exec clab-srte8-$c vtysh -c 'show ip route 192.168.8.0/24' -c 'show ip route 192.168.1.0/24'
+done
+```
+
+9. Summarize baseline results
+```bash
+python3 scripts/summarize_experiment_results.py --data-dir data --ml-output-dir data/ml_results --output-dir data/experiment_summary
+```
+
+10. Validate the decision and plot it
 ```bash
 python3 scripts/validate_decider_output.py --decision-json data/ml_results/decision_latest.json --strict
 python3 scripts/plot_topology.py --lab lab.clab.yml --paths-json candidate_paths_example.json --decision-json data/ml_results/decision_latest.json --output data/ml_results/topology_decision_latest.png
 ```
 
-8. Replay choices over the dataset
+11. Replay choices over the dataset
 ```bash
 python3 scripts/analyze_path_choices.py --dataset data/ml_results/dataset_full.csv --model data/ml_results/model_network_mlu_pct_60s.joblib --paths-json candidate_paths_example.json --state-file data/controller_state.json --lab lab.clab.yml --output-dir data/path_choice_analysis --sample-step 60
 ```
 
-9. Run controlled congestion validation
+12. Run controlled congestion validation
 ```bash
 bash scripts/force_upper_congestion_test.sh
 ```
@@ -496,7 +641,7 @@ sudo containerlab destroy -t lab.clab.yml
 ## Notes
 
 Current project status:
-- the ML predictor is strongest at `60s` horizon,
+- the ML predictor is intentionally standardized on the `60s` horizon,
 - the decider is offline, not a fully online FRR controller,
 - physical-edge scoring and observed-load inference are already implemented,
 - congestion injection experiments show consistent corridor-level reactions.

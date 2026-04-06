@@ -15,8 +15,8 @@ scripts in this conversation:
 What it does:
 1. Auto-discovers runs from a data directory.
 2. Builds one aligned time-series dataset per run.
-3. Creates future targets such as network_mlu_pct at +300/+600/+900 seconds by default.
-4. Trains time-aware regression models (default: XGBoost if available).
+3. Creates future targets such as network_mlu_pct at +60 seconds by default.
+4. Trains time-aware regression models and auto-selects the best supported regressor.
 5. Writes cleaned datasets, metrics, predictions, fitted models, and plots.
 """
 
@@ -77,8 +77,8 @@ def parse_args() -> argparse.Namespace:
         "--horizons",
         nargs="+",
         type=int,
-        default=[300, 600, 900],
-        help="Forecast horizons in seconds (default: 300 600 900)",
+        default=[60],
+        help="Forecast horizons in seconds (default: 60)",
     )
     parser.add_argument(
         "--model",

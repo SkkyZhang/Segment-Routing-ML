@@ -1,0 +1,308 @@
+{
+  "timestamp_scored": "2026-04-06 12:41:17.147000",
+  "run_key": "20260406_121117",
+  "experiment_id": "exp_ml_run1",
+  "mode": "ml_dynamic",
+  "active_policy": "srte_ml_dynamic",
+  "current_candidate_path_id": "upper_corridor",
+  "current_candidate_inference_basis": "state_or_row",
+  "current_candidate_inference_metrics": {
+    "raw_value": "upper_corridor"
+  },
+  "predicted_future_mlu_pct": 2.912,
+  "current_mlu_pct": 14.624,
+  "future_delta_pct": -11.712,
+  "estimated_elephant_rate_mbps": 901.76,
+  "threshold_pct": 70.0,
+  "max_path_util_pct": 85.0,
+  "cooldown_active": 0,
+  "decision_reason": "below_threshold_keep_current",
+  "chosen_candidate_path_id": "upper_corridor",
+  "chosen_segment_list": "",
+  "chosen_estimated_future_mlu_pct": 2.911,
+  "target_elephant_event_id": "elephant_59",
+  "target_elephant_rank": 1,
+  "target_elephant_share_pct": 51.433,
+  "target_elephant_start_path_id": "upper_corridor",
+  "topk_window_index": 29,
+  "topk_window_start_ts": "2026-04-06 12:40:26.917000",
+  "topk_window_end_ts": "2026-04-06 12:41:26.917000",
+  "topk_candidates_considered": [
+    {
+      "event_id": "elephant_59",
+      "rank": 1,
+      "share_pct": 51.433,
+      "throughput_mbps_peak": 901.76,
+      "start_candidate_path_id": "upper_corridor"
+    },
+    {
+      "event_id": "elephant_58",
+      "rank": 2,
+      "share_pct": 48.567,
+      "throughput_mbps_peak": 901.733,
+      "start_candidate_path_id": "upper_corridor"
+    }
+  ],
+  "switch_penalty_pct": 2.0,
+  "min_improvement_pct": 1.0,
+  "elephant_rate_mbps": 900.0,
+  "scoring_basis": "physical_edges",
+  "candidate_scores": [
+    {
+      "candidate_path_id": "upper_corridor",
+      "score": 2.911,
+      "estimated_future_mlu_pct": 2.911,
+      "estimated_path_hot_util_pct": 0.0,
+      "current_path_hot_util_pct": 0.0,
+      "bottleneck_link_key": "r1__r5",
+      "bottleneck_estimated_util_pct": 2.911,
+      "moved_elephant_rate_mbps": 901.76,
+      "segment_list": "",
+      "interfaces": [
+        "clab-srte8-r1:eth1",
+        "clab-srte8-r2:eth2",
+        "clab-srte8-r3:eth2",
+        "clab-srte8-r4:eth2"
+      ],
+      "top_hot_links": [
+        {
+          "link_key": "r1__r5",
+          "estimated_future_util_pct": 2.911
+        },
+        {
+          "link_key": "r1__r2",
+          "estimated_future_util_pct": 0.0
+        },
+        {
+          "link_key": "r2__r3",
+          "estimated_future_util_pct": 0.0
+        },
+        {
+          "link_key": "r3__r4",
+          "estimated_future_util_pct": 0.0
+        },
+        {
+          "link_key": "r4__r8",
+          "estimated_future_util_pct": 0.0
+        }
+      ],
+      "path_edge_loads": [
+        {
+          "edge_id": "r1__r2",
+          "estimated_tx_mbps": 0.0,
+          "estimated_util_pct": 0.0
+        },
+        {
+          "edge_id": "r2__r3",
+          "estimated_tx_mbps": 0.0,
+          "estimated_util_pct": 0.0
+        },
+        {
+          "edge_id": "r3__r4",
+          "estimated_tx_mbps": 0.0,
+          "estimated_util_pct": 0.0
+        },
+        {
+          "edge_id": "r4__r8",
+          "estimated_tx_mbps": 0.0,
+          "estimated_util_pct": 0.0
+        }
+      ]
+    },
+    {
+      "candidate_path_id": "cross_path",
+      "score": 83.049,
+      "estimated_future_mlu_pct": 81.049,
+      "estimated_path_hot_util_pct": 81.049,
+      "current_path_hot_util_pct": 0.0,
+      "bottleneck_link_key": "r6__r7",
+      "bottleneck_estimated_util_pct": 81.049,
+      "moved_elephant_rate_mbps": 901.76,
+      "segment_list": "16002|16003|16006|16007|16008",
+      "interfaces": [
+        "clab-srte8-r1:eth1",
+        "clab-srte8-r2:eth2",
+        "clab-srte8-r3:eth3",
+        "clab-srte8-r6:eth2",
+        "clab-srte8-r7:eth2"
+      ],
+      "top_hot_links": [
+        {
+          "link_key": "r6__r7",
+          "estimated_future_util_pct": 81.049
+        },
+        {
+          "link_key": "r7__r8",
+          "estimated_future_util_pct": 80.984
+        },
+        {
+          "link_key": "r3__r6",
+          "estimated_future_util_pct": 78.464
+        },
+        {
+          "link_key": "r1__r5",
+          "estimated_future_util_pct": 2.911
+        },
+        {
+          "link_key": "r1__r2",
+          "estimated_future_util_pct": 0.0
+        }
+      ],
+      "path_edge_loads": [
+        {
+          "edge_id": "r1__r2",
+          "estimated_tx_mbps": 0.0,
+          "estimated_util_pct": 0.0
+        },
+        {
+          "edge_id": "r2__r3",
+          "estimated_tx_mbps": 0.0,
+          "estimated_util_pct": 0.0
+        },
+        {
+          "edge_id": "r3__r6",
+          "estimated_tx_mbps": 901.76,
+          "estimated_util_pct": 78.464
+        },
+        {
+          "edge_id": "r6__r7",
+          "estimated_tx_mbps": 927.614,
+          "estimated_util_pct": 81.049
+        },
+        {
+          "edge_id": "r7__r8",
+          "estimated_tx_mbps": 926.962,
+          "estimated_util_pct": 80.984
+        }
+      ]
+    },
+    {
+      "candidate_path_id": "lower_corridor",
+      "score": 107.218,
+      "estimated_future_mlu_pct": 93.087,
+      "estimated_path_hot_util_pct": 93.087,
+      "current_path_hot_util_pct": 0.0,
+      "bottleneck_link_key": "r1__r5",
+      "bottleneck_estimated_util_pct": 93.087,
+      "moved_elephant_rate_mbps": 901.76,
+      "segment_list": "16005|16006|16007|16008",
+      "interfaces": [
+        "clab-srte8-r1:eth2",
+        "clab-srte8-r5:eth2",
+        "clab-srte8-r6:eth2",
+        "clab-srte8-r7:eth2"
+      ],
+      "top_hot_links": [
+        {
+          "link_key": "r1__r5",
+          "estimated_future_util_pct": 93.087
+        },
+        {
+          "link_key": "r5__r6",
+          "estimated_future_util_pct": 81.082
+        },
+        {
+          "link_key": "r6__r7",
+          "estimated_future_util_pct": 81.049
+        },
+        {
+          "link_key": "r7__r8",
+          "estimated_future_util_pct": 80.984
+        },
+        {
+          "link_key": "r1__r2",
+          "estimated_future_util_pct": 0.0
+        }
+      ],
+      "path_edge_loads": [
+        {
+          "edge_id": "r1__r5",
+          "estimated_tx_mbps": 1047.996,
+          "estimated_util_pct": 93.087
+        },
+        {
+          "edge_id": "r5__r6",
+          "estimated_tx_mbps": 927.941,
+          "estimated_util_pct": 81.082
+        },
+        {
+          "edge_id": "r6__r7",
+          "estimated_tx_mbps": 927.614,
+          "estimated_util_pct": 81.049
+        },
+        {
+          "edge_id": "r7__r8",
+          "estimated_tx_mbps": 926.962,
+          "estimated_util_pct": 80.984
+        }
+      ]
+    },
+    {
+      "candidate_path_id": "cross_path_reverse",
+      "score": 107.218,
+      "estimated_future_mlu_pct": 93.087,
+      "estimated_path_hot_util_pct": 93.087,
+      "current_path_hot_util_pct": 0.0,
+      "bottleneck_link_key": "r1__r5",
+      "bottleneck_estimated_util_pct": 93.087,
+      "moved_elephant_rate_mbps": 901.76,
+      "segment_list": "16005|16006|16003|16004|16008",
+      "interfaces": [
+        "clab-srte8-r1:eth2",
+        "clab-srte8-r5:eth2",
+        "clab-srte8-r6:eth3",
+        "clab-srte8-r3:eth2",
+        "clab-srte8-r4:eth2"
+      ],
+      "top_hot_links": [
+        {
+          "link_key": "r1__r5",
+          "estimated_future_util_pct": 93.087
+        },
+        {
+          "link_key": "r5__r6",
+          "estimated_future_util_pct": 81.082
+        },
+        {
+          "link_key": "r3__r6",
+          "estimated_future_util_pct": 78.464
+        },
+        {
+          "link_key": "r1__r2",
+          "estimated_future_util_pct": 0.0
+        },
+        {
+          "link_key": "r2__r3",
+          "estimated_future_util_pct": 0.0
+        }
+      ],
+      "path_edge_loads": [
+        {
+          "edge_id": "r1__r5",
+          "estimated_tx_mbps": 1047.996,
+          "estimated_util_pct": 93.087
+        },
+        {
+          "edge_id": "r5__r6",
+          "estimated_tx_mbps": 927.941,
+          "estimated_util_pct": 81.082
+        },
+        {
+          "edge_id": "r3__r6",
+          "estimated_tx_mbps": 901.76,
+          "estimated_util_pct": 78.464
+        },
+        {
+          "edge_id": "r3__r4",
+          "estimated_tx_mbps": 0.0,
+          "estimated_util_pct": 0.0
+        },
+        {
+          "edge_id": "r4__r8",
+          "estimated_tx_mbps": 0.0,
+          "estimated_util_pct": 0.0
+        }
+      ]
+    }
+  ]
+}

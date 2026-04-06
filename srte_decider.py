@@ -18,6 +18,7 @@ import argparse
 import json
 import math
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -126,6 +127,11 @@ def parse_args() -> argparse.Namespace:
         default=85.0,
         help="Soft limit for the hottest link on the chosen candidate path",
     )
+    parser.add_argument(
+        "--topk-csv",
+        default="",
+        help="Optional topk_elephants_*.csv used to identify the target elephant flow for this decision",
+    )
     return parser.parse_args()
 
 
@@ -133,6 +139,90 @@ def load_json(path: str) -> Dict[str, Any]:
     p = Path(path)
     if not path or not p.exists():
         return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def parse_run_key_timestamp(run_key: str) -> Optional[datetime]:
+    try:
+        return datetime.strptime(str(run_key), "%Y%m%d_%H%M%S")
+    except Exception:
+        return None
+
+
+def read_topk_context(path: str, run_key: str, timestamp: pd.Timestamp) -> Dict[str, Any]:
+    p = Path(path)
+    if not path or not p.exists():
+        return {}
+    try:
+        topk = pd.read_csv(p)
+    except Exception:
+        return {}
+    if topk.empty:
+        return {}
+    original = topk.copy()
+    if "run_key" in topk.columns:
+        exact = topk[topk["run_key"].astype(str) == str(run_key)].copy()
+        if not exact.empty:
+            topk = exact
+        else:
+            topk = original
+    for col in ["window_start_ts", "window_end_ts"]:
+        if col in topk.columns:
+            topk[col] = pd.to_datetime(topk[col], errors="coerce")
+            if getattr(topk[col].dt, "tz", None) is not None:
+                topk[col] = topk[col].dt.tz_localize(None)
+    if getattr(timestamp, "tzinfo", None) is not None:
+        timestamp = timestamp.tz_localize(None)
+    if "window_start_ts" not in topk.columns or "window_end_ts" not in topk.columns:
+        return {}
+    topk = topk.dropna(subset=["window_start_ts", "window_end_ts"]).copy()
+    if topk.empty:
+        return {}
+
+    window = topk[(topk["window_start_ts"] <= timestamp) & (topk["window_end_ts"] >= timestamp)].copy()
+    if window.empty:
+        earlier = topk[topk["window_start_ts"] <= timestamp].copy()
+        if earlier.empty:
+            later = topk[topk["window_start_ts"] > timestamp].copy()
+            if later.empty:
+                return {}
+            latest_start = later["window_start_ts"].min()
+            window = later[later["window_start_ts"] == latest_start].copy()
+        else:
+            latest_start = earlier["window_start_ts"].max()
+            window = earlier[earlier["window_start_ts"] == latest_start].copy()
+    if window.empty:
+        return {}
+
+    if "rank" in window.columns:
+        window["rank"] = pd.to_numeric(window["rank"], errors="coerce")
+        window = window.sort_values(["rank", "throughput_mbps_peak"], ascending=[True, False])
+
+    top_rows = window.head(3).copy()
+    primary = top_rows.iloc[0].to_dict()
+    return {
+        "window_index": int(pd.to_numeric(pd.Series([primary.get("window_index")]), errors="coerce").fillna(-1).iloc[0]),
+        "window_start_ts": str(primary.get("window_start_ts", "")),
+        "window_end_ts": str(primary.get("window_end_ts", "")),
+        "target_elephant_event_id": str(primary.get("event_id", "")),
+        "target_elephant_rank": int(pd.to_numeric(pd.Series([primary.get("rank")]), errors="coerce").fillna(0).iloc[0]),
+        "target_elephant_share_pct": float(pd.to_numeric(pd.Series([primary.get("flow_share_pct")]), errors="coerce").fillna(0.0).iloc[0]),
+        "target_elephant_throughput_mbps": float(pd.to_numeric(pd.Series([primary.get("throughput_mbps_peak")]), errors="coerce").fillna(0.0).iloc[0]),
+        "target_elephant_start_path_id": str(primary.get("start_candidate_path_id", "")),
+        "topk_candidates_considered": [
+            {
+                "event_id": str(row.get("event_id", "")),
+                "rank": int(pd.to_numeric(pd.Series([row.get("rank")]), errors="coerce").fillna(0).iloc[0]),
+                "share_pct": float(pd.to_numeric(pd.Series([row.get("flow_share_pct")]), errors="coerce").fillna(0.0).iloc[0]),
+                "throughput_mbps_peak": float(pd.to_numeric(pd.Series([row.get("throughput_mbps_peak")]), errors="coerce").fillna(0.0).iloc[0]),
+                "start_candidate_path_id": str(row.get("start_candidate_path_id", "")),
+            }
+            for _, row in top_rows.iterrows()
+        ],
+    }
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
@@ -434,7 +524,12 @@ def infer_current_candidate(
     return "", "unknown", {}
 
 
-def estimate_elephant_rate(row: pd.Series, fallback_rate_mbps: float) -> float:
+def estimate_elephant_rate(row: pd.Series, fallback_rate_mbps: float, topk_context: Optional[Dict[str, Any]] = None) -> float:
+    if topk_context:
+        for key in ["target_elephant_throughput_mbps"]:
+            num = pd.to_numeric(pd.Series([topk_context.get(key)]), errors="coerce").iloc[0]
+            if np.isfinite(num) and float(num) > 0:
+                return float(num)
     candidates = [
         row.get("topk_detail__top1_throughput_mbps_mean"),
         row.get("topk_detail__top1_throughput_mbps_peak"),
@@ -534,6 +629,7 @@ def build_decision(
     max_path_util_pct: float,
     force_evaluate: bool,
     peer_map: Optional[Dict[str, str]] = None,
+    topk_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     row_df = pd.DataFrame([row])
     X_row = clean_feature_row(row_df, target_col=target_col)
@@ -558,7 +654,7 @@ def build_decision(
             errors="coerce",
         ).fillna(0).iloc[0]
     )
-    estimated_elephant_rate_mbps = estimate_elephant_rate(row, elephant_rate_mbps)
+    estimated_elephant_rate_mbps = estimate_elephant_rate(row, elephant_rate_mbps, topk_context=topk_context)
     use_edge_scoring = bool(peer_map and edge_state and all(spec.get("edge_ids") for spec in paths_map.values()))
 
     if current_candidate and current_candidate in paths_map:
@@ -689,6 +785,14 @@ def build_decision(
         "chosen_candidate_path_id": chosen["candidate_path_id"],
         "chosen_segment_list": chosen.get("segment_list", ""),
         "chosen_estimated_future_mlu_pct": chosen["estimated_future_mlu_pct"],
+        "target_elephant_event_id": str((topk_context or {}).get("target_elephant_event_id", "")),
+        "target_elephant_rank": (topk_context or {}).get("target_elephant_rank"),
+        "target_elephant_share_pct": (topk_context or {}).get("target_elephant_share_pct"),
+        "target_elephant_start_path_id": str((topk_context or {}).get("target_elephant_start_path_id", "")),
+        "topk_window_index": (topk_context or {}).get("window_index"),
+        "topk_window_start_ts": str((topk_context or {}).get("window_start_ts", "")),
+        "topk_window_end_ts": str((topk_context or {}).get("window_end_ts", "")),
+        "topk_candidates_considered": (topk_context or {}).get("topk_candidates_considered", []),
         "switch_penalty_pct": switch_penalty_pct,
         "min_improvement_pct": min_improvement_pct,
         "elephant_rate_mbps": elephant_rate_mbps,
@@ -719,6 +823,11 @@ def main() -> None:
     state = load_json(args.state_file)
 
     row = choose_row(df, run_key=args.run_key, timestamp=args.timestamp)
+    topk_context = read_topk_context(
+        path=args.topk_csv,
+        run_key=str(row.get("run_key", "")),
+        timestamp=pd.to_datetime(row["timestamp"], errors="coerce"),
+    ) if args.topk_csv else {}
     decision = build_decision(
         row=row,
         model=model,
@@ -732,6 +841,7 @@ def main() -> None:
         max_path_util_pct=args.max_path_util_pct,
         force_evaluate=args.force_evaluate,
         peer_map=peer_map,
+        topk_context=topk_context,
     )
 
     text = json.dumps(decision, indent=2, ensure_ascii=False)

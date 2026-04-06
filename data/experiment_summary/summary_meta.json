@@ -1,0 +1,12 @@
+{
+  "run_count": 3,
+  "modes": [
+    "igp",
+    "ml_dynamic",
+    "static"
+  ],
+  "data_dir": "data",
+  "ml_output_dir": "data/ml_results_run_20260406_144401",
+  "output_dir": "data/experiment_summary",
+  "workflow_focus": "60-second SR-TE baseline comparison"
+}

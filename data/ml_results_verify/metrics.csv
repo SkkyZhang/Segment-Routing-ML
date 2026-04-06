@@ -1,0 +1,2 @@
+model,horizon_s,target,train_rows,val_rows,test_rows,n_numeric_features,n_categorical_features,train_mae,train_rmse,train_r2,test_mae,test_rmse,test_r2,val_rmse_xgboost,val_rmse_hist_gbm,selected_val_rmse,val_mae,val_rmse,val_r2
+hist_gbm,60,network_mlu_pct,1323,188,314,722,10,5.960937406496228,8.812191930600681,0.9572261572813938,15.279730625029144,23.15642847938491,0.6893747362392675,24.810519988996187,24.581119386553805,24.581119386553805,4.468213546945861,6.960251722484097,0.9715492393543447

@@ -1,0 +1,4 @@
+group_by,group_value,model,horizon_s,target,rows,mae,rmse,r2
+mode,igp,hist_gbm,60,network_mlu_pct,111,7.0449290532106215,10.870945813699688,0.9293333298410388
+mode,ml_dynamic,hist_gbm,60,network_mlu_pct,100,24.13298538625361,31.99619677524634,0.423391679045381
+mode,static,hist_gbm,60,network_mlu_pct,103,15.558735463372926,22.65824124207445,0.7040225206120285
