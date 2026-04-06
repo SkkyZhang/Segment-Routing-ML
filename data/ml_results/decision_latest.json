@@ -1,0 +1,118 @@
+{
+  "timestamp_scored": "2026-04-05 15:56:17.797000",
+  "run_key": "20260405_152617",
+  "experiment_id": "exp_static_medium_seed42",
+  "mode": "static",
+  "active_policy": "srte_static",
+  "current_candidate_path_id": "path_b",
+  "predicted_future_mlu_pct": 93.352,
+  "current_mlu_pct": 92.778,
+  "future_delta_pct": 0.574,
+  "threshold_pct": 70.0,
+  "cooldown_active": 0,
+  "decision_reason": "best_score",
+  "chosen_candidate_path_id": "path_a",
+  "chosen_segment_list": "16002|16004",
+  "chosen_estimated_future_mlu_pct": 90.574,
+  "switch_penalty_pct": 2.0,
+  "min_improvement_pct": 1.0,
+  "elephant_rate_mbps": 900.0,
+  "candidate_scores": [
+    {
+      "candidate_path_id": "path_a",
+      "score": 92.574,
+      "estimated_future_mlu_pct": 90.574,
+      "segment_list": "16002|16004",
+      "interfaces": [
+        "clab-srte4-r1:eth1",
+        "clab-srte4-r2:eth2"
+      ],
+      "top_hot_links": [
+        {
+          "link_key": "clab_srte4_r1__eth1",
+          "estimated_future_util_pct": 90.574
+        },
+        {
+          "link_key": "clab_srte4_r2__eth2",
+          "estimated_future_util_pct": 90.574
+        },
+        {
+          "link_key": "clab_srte4_r3__eth2",
+          "estimated_future_util_pct": 3.352
+        },
+        {
+          "link_key": "clab_srte4_r1__eth2",
+          "estimated_future_util_pct": 2.024
+        },
+        {
+          "link_key": "clab_srte4_r4__eth1",
+          "estimated_future_util_pct": 0.684
+        }
+      ]
+    },
+    {
+      "candidate_path_id": "path_b",
+      "score": 93.352,
+      "estimated_future_mlu_pct": 93.352,
+      "segment_list": "16003|16004",
+      "interfaces": [
+        "clab-srte4-r1:eth2",
+        "clab-srte4-r3:eth2"
+      ],
+      "top_hot_links": [
+        {
+          "link_key": "clab_srte4_r3__eth2",
+          "estimated_future_util_pct": 93.352
+        },
+        {
+          "link_key": "clab_srte4_r1__eth2",
+          "estimated_future_util_pct": 92.024
+        },
+        {
+          "link_key": "clab_srte4_r4__eth1",
+          "estimated_future_util_pct": 0.684
+        },
+        {
+          "link_key": "clab_srte4_r2__eth1",
+          "estimated_future_util_pct": 0.683
+        },
+        {
+          "link_key": "clab_srte4_r1__eth1",
+          "estimated_future_util_pct": 0.574
+        }
+      ]
+    },
+    {
+      "candidate_path_id": "igp_shortest",
+      "score": 95.352,
+      "estimated_future_mlu_pct": 93.352,
+      "segment_list": "",
+      "interfaces": [
+        "clab-srte4-r1:eth2",
+        "clab-srte4-r3:eth2"
+      ],
+      "top_hot_links": [
+        {
+          "link_key": "clab_srte4_r3__eth2",
+          "estimated_future_util_pct": 93.352
+        },
+        {
+          "link_key": "clab_srte4_r1__eth2",
+          "estimated_future_util_pct": 92.024
+        },
+        {
+          "link_key": "clab_srte4_r4__eth1",
+          "estimated_future_util_pct": 0.684
+        },
+        {
+          "link_key": "clab_srte4_r2__eth1",
+          "estimated_future_util_pct": 0.683
+        },
+        {
+          "link_key": "clab_srte4_r1__eth1",
+          "estimated_future_util_pct": 0.574
+        }
+      ]
+    }
+  ]
+}

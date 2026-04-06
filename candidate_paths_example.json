@@ -1,0 +1,26 @@
+{
+  "igp_shortest": {
+    "interfaces": [
+      "clab-srte4-r1:eth2",
+      "clab-srte4-r3:eth2"
+    ],
+    "segment_list": "",
+    "description": "Current IGP shortest path, likely via r3 branch"
+  },
+  "path_a": {
+    "interfaces": [
+      "clab-srte4-r1:eth1",
+      "clab-srte4-r2:eth2"
+    ],
+    "segment_list": "16002|16004",
+    "description": "Alternative SR-TE path via r2 branch"
+  },
+  "path_b": {
+    "interfaces": [
+      "clab-srte4-r1:eth2",
+      "clab-srte4-r3:eth2"
+    ],
+    "segment_list": "16003|16004",
+    "description": "SR-TE path via r3 branch"
+  }
+}

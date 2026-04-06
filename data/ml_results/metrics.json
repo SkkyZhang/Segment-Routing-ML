@@ -1,0 +1,21 @@
+[
+  {
+    "model":"xgboost",
+    "horizon_s":60,
+    "target":"network_mlu_pct",
+    "train_rows":1875,
+    "val_rows":268,
+    "test_rows":445,
+    "n_numeric_features":1013,
+    "n_categorical_features":35,
+    "train_mae":1.0572037021,
+    "train_rmse":1.3919869955,
+    "train_r2":0.9989156381,
+    "test_mae":4.4403306515,
+    "test_rmse":9.7687138266,
+    "test_r2":0.9467591708,
+    "val_mae":3.5711009004,
+    "val_rmse":7.0119419189,
+    "val_r2":0.97218868
+  }
+]
