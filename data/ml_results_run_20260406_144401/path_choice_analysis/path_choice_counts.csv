@@ -1,0 +1,6 @@
+run_key,mode,chosen_candidate_path_id,count
+20260406_110810,igp,lower_corridor,7
+20260406_110810,igp,upper_corridor,6
+20260406_114036,static,lower_corridor,12
+20260406_121117,ml_dynamic,lower_corridor,4
+20260406_121117,ml_dynamic,upper_corridor,8

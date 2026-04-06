@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+
+clab-srte8/
+
+scripts/data/
+scripts/__pycache__/
+
+data/*.lock

@@ -1,2 +1,0 @@
-model,horizon_s,target,train_rows,val_rows,test_rows,n_numeric_features,n_categorical_features,train_mae,train_rmse,train_r2,test_mae,test_rmse,test_r2,val_mae,val_rmse,val_r2
-xgboost,60,network_mlu_pct,1875,268,445,1013,35,1.057203702095159,1.3919869955045914,0.998915638087265,4.440330651534006,9.768713826551892,0.9467591708278185,3.5711009004044887,7.011941918892839,0.9721886799907473

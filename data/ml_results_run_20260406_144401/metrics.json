@@ -1,0 +1,24 @@
+[
+  {
+    "model":"hist_gbm",
+    "horizon_s":60,
+    "target":"network_mlu_pct",
+    "train_rows":1323,
+    "val_rows":188,
+    "test_rows":314,
+    "n_numeric_features":722,
+    "n_categorical_features":10,
+    "train_mae":5.9609374065,
+    "train_rmse":8.8121919306,
+    "train_r2":0.9572261573,
+    "test_mae":15.279730625,
+    "test_rmse":23.1564284794,
+    "test_r2":0.6893747362,
+    "val_rmse_xgboost":24.810519989,
+    "val_rmse_hist_gbm":24.5811193866,
+    "selected_val_rmse":24.5811193866,
+    "val_mae":4.4682135469,
+    "val_rmse":6.9602517225,
+    "val_r2":0.9715492394
+  }
+]

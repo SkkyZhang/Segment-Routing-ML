@@ -1,0 +1,9 @@
+run_key,mode,decision_reason,count
+20260406_110810,igp,below_threshold_keep_current,7
+20260406_110810,igp,best_candidate_path_still_too_hot_keep_current,6
+20260406_114036,static,below_threshold_keep_current,6
+20260406_114036,static,best_candidate_path_still_too_hot_keep_current,3
+20260406_114036,static,best_score,3
+20260406_121117,ml_dynamic,below_threshold_keep_current,9
+20260406_121117,ml_dynamic,best_candidate_path_still_too_hot_keep_current,2
+20260406_121117,ml_dynamic,best_score,1

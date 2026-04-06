@@ -4,9 +4,9 @@ set -Eeuo pipefail
 DOCKER_CMD="${DOCKER_CMD:-sudo docker}"
 read -r -a DOCKER <<< "$DOCKER_CMD"
 
-H1_CONTAINER="${H1_CONTAINER:-clab-srte4-h1}"
-H2_CONTAINER="${H2_CONTAINER:-clab-srte4-h2}"
-DST_IP="${DST_IP:-192.168.4.2}"
+H1_CONTAINER="${H1_CONTAINER:-clab-srte8-h1}"
+H2_CONTAINER="${H2_CONTAINER:-clab-srte8-h2}"
+DST_IP="${DST_IP:-192.168.8.2}"
 
 TOTAL_DURATION="${TOTAL_DURATION:-1800}"
 LOG_DIR="${LOG_DIR:-data}"
@@ -36,6 +36,8 @@ MICE_BITRATE_MBPS="${MICE_BITRATE_MBPS:-}"
 
 IPERF_INTERVAL_SECS="${IPERF_INTERVAL_SECS:-1}"
 START_OFFSET_S="${START_OFFSET_S:-5}"
+TOPK_WINDOW_SECS="${TOPK_WINDOW_SECS:-60}"
+TOPK_K="${TOPK_K:-5}"
 
 TS="$(date +%Y%m%d_%H%M%S)"
 RAW_JSON_DIR="${LOG_DIR}/iperf_json_${TS}"
@@ -43,6 +45,8 @@ STATE_SNAPSHOT_DIR="${LOG_DIR}/state_snapshots_${TS}"
 EVENTS_CSV="${LOG_DIR}/traffic_events_exp_mixed_${TS}.csv"
 FLOW_INTERVALS_CSV="${LOG_DIR}/traffic_flow_intervals_exp_mixed_${TS}.csv"
 MANIFEST_JSON="${LOG_DIR}/traffic_manifest_exp_mixed_${TS}.json"
+TOPK_CSV="${LOG_DIR}/topk_elephants_${TS}.csv"
+TOPK_WINDOWS_CSV="${LOG_DIR}/topk_elephant_windows_${TS}.csv"
 LOCK_FILE="${LOG_DIR}/traffic_events_exp_mixed_${TS}.lock"
 
 mkdir -p "$LOG_DIR" "$RAW_JSON_DIR" "$STATE_SNAPSHOT_DIR"
@@ -64,8 +68,33 @@ require_bin() {
 
 require_iperf3() {
   local container="$1"
-  "${DOCKER[@]}" exec "$container" sh -lc 'command -v iperf3 >/dev/null 2>&1' \
-    || die "容器 $container 里没有 iperf3"
+  if "${DOCKER[@]}" exec "$container" sh -lc 'command -v iperf3 >/dev/null 2>&1'; then
+    return 0
+  fi
+
+  log "容器 $container 缺少 iperf3，尝试自动安装"
+  if ! "${DOCKER[@]}" exec "$container" sh -lc '
+    set -e
+    if command -v iperf3 >/dev/null 2>&1; then
+      exit 0
+    fi
+    if command -v apk >/dev/null 2>&1; then
+      apk add --no-cache iperf3
+    elif command -v apt-get >/dev/null 2>&1; then
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y iperf3
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y iperf3
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y iperf3
+    else
+      exit 9
+    fi
+    command -v iperf3 >/dev/null 2>&1
+  '; then
+    die "容器 $container 里没有 iperf3，且自动安装失败"
+  fi
 }
 
 set_default_if_empty() {
@@ -153,6 +182,8 @@ write_manifest() {
   "state_file": "$STATE_FILE",
   "events_csv": "$EVENTS_CSV",
   "flow_intervals_csv": "$FLOW_INTERVALS_CSV",
+  "topk_elephants_csv": "$TOPK_CSV",
+  "topk_elephant_windows_csv": "$TOPK_WINDOWS_CSV",
   "raw_json_dir": "$RAW_JSON_DIR",
   "state_snapshot_dir": "$STATE_SNAPSHOT_DIR",
   "elephant_port": $ELEPHANT_PORT,
@@ -167,7 +198,9 @@ write_manifest() {
   "mice_duration_max_s": $MICE_DURATION_MAX,
   "mice_parallel": $MICE_PARALLEL,
   "mice_bitrate_mbps": $MICE_BITRATE_MBPS,
-  "iperf_interval_secs": $IPERF_INTERVAL_SECS
+  "iperf_interval_secs": $IPERF_INTERVAL_SECS,
+  "topk_window_secs": $TOPK_WINDOW_SECS,
+  "topk_k": $TOPK_K
 }
 EOF
 }
@@ -678,9 +711,17 @@ main() {
   done
 
   wait
+  python3 scripts/build_topk_dataset.py \
+    --flow-intervals-csv "$FLOW_INTERVALS_CSV" \
+    --output-csv "$TOPK_CSV" \
+    --window-summary-csv "$TOPK_WINDOWS_CSV" \
+    --window-secs "$TOPK_WINDOW_SECS" \
+    --top-k "$TOPK_K"
   log "全部流量已完成"
   log "事件日志: $EVENTS_CSV"
   log "流级采样日志: $FLOW_INTERVALS_CSV"
+  log "Top-K 大象流日志: $TOPK_CSV"
+  log "Top-K 窗口汇总: $TOPK_WINDOWS_CSV"
   log "原始 JSON 目录: $RAW_JSON_DIR"
   log "状态快照目录: $STATE_SNAPSHOT_DIR"
   log "实验清单: $MANIFEST_JSON"

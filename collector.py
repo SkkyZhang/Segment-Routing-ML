@@ -291,6 +291,99 @@ def get_ping_stats(
     return stats
 
 
+def parse_probe_specs(specs: List[str]) -> List[Dict[str, str]]:
+    probes: List[Dict[str, str]] = []
+    for idx, spec in enumerate(specs):
+        parts = spec.split(":")
+        if len(parts) < 2:
+            raise ValueError(f"Invalid probe spec: {spec}")
+        src = parts[0].strip()
+        dst = parts[1].strip()
+        label = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else f"probe_{idx}"
+        if not src or not dst:
+            raise ValueError(f"Invalid probe spec: {spec}")
+        probes.append({"src": src, "dst": dst, "label": label})
+    return probes
+
+
+def aggregate_probe_stats(probe_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not probe_rows:
+        return {
+            "ping_src": "",
+            "ping_dst": "",
+            "ping_cmd_ok": "",
+            "ping_ok": "",
+            "ping_sent": "",
+            "ping_received": "",
+            "ping_reply_count": "",
+            "ping_loss_pct": "",
+            "ping_rtts_ms": "",
+            "ping_rtt_min_ms": "",
+            "ping_rtt_avg_ms": "",
+            "ping_rtt_max_ms": "",
+            "ping_rtt_mdev_ms": "",
+            "ping_rtt_p50_ms": "",
+            "ping_rtt_p95_ms": "",
+            "ping_rtt_p99_ms": "",
+            "probe_count": 0,
+            "probe_success_count": 0,
+            "probe_success_ratio": "",
+        }
+
+    all_rtts: List[float] = []
+    cmd_ok_sum = 0
+    ok_sum = 0
+    sent_sum = 0
+    recv_sum = 0
+    loss_values: List[float] = []
+    avg_values: List[float] = []
+    mdev_values: List[float] = []
+
+    for row in probe_rows:
+        cmd_ok_sum += int(row.get("ping_cmd_ok", 0) or 0)
+        ok_sum += int(row.get("ping_ok", 0) or 0)
+        sent_sum += int(row.get("ping_sent", 0) or 0)
+        recv_sum += int(row.get("ping_received", 0) or 0)
+        if row.get("ping_loss_pct") not in ("", None):
+            loss_values.append(float(row["ping_loss_pct"]))
+        if row.get("ping_rtt_avg_ms") not in ("", None):
+            avg_values.append(float(row["ping_rtt_avg_ms"]))
+        if row.get("ping_rtt_mdev_ms") not in ("", None):
+            mdev_values.append(float(row["ping_rtt_mdev_ms"]))
+        rtts_text = str(row.get("ping_rtts_ms", "") or "").strip()
+        if rtts_text:
+            for item in rtts_text.split(";"):
+                try:
+                    all_rtts.append(float(item))
+                except ValueError:
+                    continue
+
+    probe_count = len(probe_rows)
+    success_ratio = round(ok_sum / probe_count, 3) if probe_count > 0 else ""
+    agg: Dict[str, Any] = {
+        "ping_src": "multi" if probe_count > 1 else probe_rows[0].get("ping_src", ""),
+        "ping_dst": "multi" if probe_count > 1 else probe_rows[0].get("ping_dst", ""),
+        "ping_cmd_ok": 1 if cmd_ok_sum == probe_count else 0,
+        "ping_ok": 1 if ok_sum == probe_count else 0,
+        "ping_sent": sent_sum,
+        "ping_received": recv_sum,
+        "ping_reply_count": len(all_rtts),
+        "ping_loss_pct": round(sum(loss_values) / len(loss_values), 3) if loss_values else "",
+        "ping_rtts_ms": ";".join(f"{v:.3f}" for v in all_rtts),
+        "ping_rtt_min_ms": round(min(all_rtts), 3) if all_rtts else "",
+        "ping_rtt_avg_ms": round(sum(avg_values) / len(avg_values), 3) if avg_values else "",
+        "ping_rtt_max_ms": round(max(all_rtts), 3) if all_rtts else "",
+        "ping_rtt_mdev_ms": round(sum(mdev_values) / len(mdev_values), 3) if mdev_values else "",
+        "ping_rtt_p50_ms": percentile(all_rtts, 0.50),
+        "ping_rtt_p95_ms": percentile(all_rtts, 0.95),
+        "ping_rtt_p99_ms": percentile(all_rtts, 0.99),
+        "probe_count": probe_count,
+        "probe_success_count": ok_sum,
+        "probe_success_ratio": success_ratio,
+    }
+    return agg
+
+
 def load_runtime_state(
     state_file: Optional[str],
     cli_mode: str,
@@ -384,17 +477,23 @@ def main() -> None:
         "--targets",
         nargs="+",
         required=True,
-        help="Container/interface specs, e.g. clab-srte4-r1:eth1,eth2 clab-srte4-r2:eth1,eth2",
+        help="Container/interface specs, e.g. clab-srte8-r1:eth1,eth2 clab-srte8-r2:eth1,eth2",
     )
     parser.add_argument(
         "--capacities",
         nargs="+",
         default=[],
-        help="Link capacities in Mbps, e.g. clab-srte4-r1:eth1=1000 clab-srte4-r1:eth2=1000",
+        help="Link capacities in Mbps, e.g. clab-srte8-r1:eth1=1000 clab-srte8-r1:eth2=1000",
     )
 
-    parser.add_argument("--ping-src", default="clab-srte4-h1")
-    parser.add_argument("--ping-dst", default="192.168.4.2")
+    parser.add_argument("--ping-src", default="clab-srte8-h1")
+    parser.add_argument("--ping-dst", default="192.168.8.2")
+    parser.add_argument(
+        "--probes",
+        nargs="*",
+        default=[],
+        help="Optional multi-probe specs: src_container:dst_ip[:label]",
+    )
     parser.add_argument("--ping-count", type=int, default=5)
     parser.add_argument("--ping-timeout", type=int, default=1)
     parser.add_argument("--ping-interval", type=float, default=0.2)
@@ -433,6 +532,12 @@ def main() -> None:
     ts_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
     long_outfile = os.path.join(args.outdir, f"telemetry_long_{ts_prefix}.csv")
     wide_outfile = os.path.join(args.outdir, f"telemetry_wide_{ts_prefix}.csv")
+    probe_outfile = os.path.join(args.outdir, f"probe_rtt_{ts_prefix}.csv")
+    control_outfile = os.path.join(args.outdir, f"control_overhead_{ts_prefix}.csv")
+
+    probes = parse_probe_specs(args.probes) if args.probes else [
+        {"src": args.ping_src, "dst": args.ping_dst, "label": "default_probe"}
+    ]
 
     prev_stats: Dict[str, Dict[str, Dict[str, int]]] = {}
     prev_qdisc: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -487,6 +592,70 @@ def main() -> None:
         "ping_rtt_p50_ms",
         "ping_rtt_p95_ms",
         "ping_rtt_p99_ms",
+        "probe_count",
+        "probe_success_count",
+        "probe_success_ratio",
+    ]
+
+    probe_fieldnames = [
+        "timestamp",
+        "wall_time_epoch_ms",
+        "sample_id",
+        "experiment_id",
+        "elapsed_s",
+        "dt_s",
+        "probe_label",
+        "ping_src",
+        "ping_dst",
+        "ping_cmd_ok",
+        "ping_ok",
+        "ping_sent",
+        "ping_received",
+        "ping_reply_count",
+        "ping_loss_pct",
+        "ping_rtts_ms",
+        "ping_rtt_min_ms",
+        "ping_rtt_avg_ms",
+        "ping_rtt_max_ms",
+        "ping_rtt_mdev_ms",
+        "ping_rtt_p50_ms",
+        "ping_rtt_p95_ms",
+        "ping_rtt_p99_ms",
+    ]
+
+    control_fieldnames = [
+        "timestamp",
+        "wall_time_epoch_ms",
+        "sample_id",
+        "experiment_id",
+        "elapsed_s",
+        "dt_s",
+        "state_read_ok",
+        "mode",
+        "traffic_profile",
+        "active_policy",
+        "policy_id",
+        "candidate_path_id",
+        "policy_seq",
+        "decision_id",
+        "reroute_event",
+        "cooldown_active",
+        "event",
+        "event_ts",
+        "cooldown_until",
+        "elephant_path_hint",
+        "elephant_flow_id",
+        "elephant_topk_rank",
+        "ingress_node",
+        "segment_list",
+        "controller_epoch_s",
+        "gain_mlu_pct",
+        "gain_rtt_ms",
+        "policy_seq_delta",
+        "policy_changed",
+        "decision_changed",
+        "path_changed",
+        "controller_lag_s",
     ]
 
     long_fieldnames = [
@@ -607,15 +776,24 @@ def main() -> None:
 
     print(f"Writing long telemetry to {long_outfile}")
     print(f"Writing wide telemetry to {wide_outfile}")
+    print(f"Writing probe telemetry to {probe_outfile}")
+    print(f"Writing control overhead to {control_outfile}")
 
     try:
         with open(long_outfile, "w", newline="", encoding="utf-8") as long_f, open(
             wide_outfile, "w", newline="", encoding="utf-8"
-        ) as wide_f:
+        ) as wide_f, open(probe_outfile, "w", newline="", encoding="utf-8") as probe_f, open(
+            control_outfile, "w", newline="", encoding="utf-8"
+        ) as control_f:
             long_writer = csv.DictWriter(long_f, fieldnames=long_fieldnames)
             wide_writer = csv.DictWriter(wide_f, fieldnames=wide_fieldnames)
+            probe_writer = csv.DictWriter(probe_f, fieldnames=probe_fieldnames)
+            control_writer = csv.DictWriter(control_f, fieldnames=control_fieldnames)
             long_writer.writeheader()
             wide_writer.writeheader()
+            probe_writer.writeheader()
+            control_writer.writeheader()
+            prev_runtime_state: Dict[str, Any] = {}
 
             while True:
                 loop_start = time.monotonic()
@@ -847,14 +1025,32 @@ def main() -> None:
                     for row in interval_rows[-len(ifaces):]:
                         row["dominant_egress_iface"] = dominant_iface
 
-                ping_stats = get_ping_stats(
-                    args.ping_src,
-                    args.ping_dst,
-                    count=args.ping_count,
-                    timeout=args.ping_timeout,
-                    interval=args.ping_interval,
-                    cmd_timeout=args.cmd_timeout,
-                )
+                probe_rows: List[Dict[str, Any]] = []
+                for probe in probes:
+                    probe_stats = get_ping_stats(
+                        probe["src"],
+                        probe["dst"],
+                        count=args.ping_count,
+                        timeout=args.ping_timeout,
+                        interval=args.ping_interval,
+                        cmd_timeout=args.cmd_timeout,
+                    )
+                    probe_row = {
+                        "timestamp": ts,
+                        "wall_time_epoch_ms": wall_time_epoch_ms,
+                        "sample_id": sample_id,
+                        "experiment_id": args.experiment_id,
+                        "elapsed_s": round(elapsed, 3),
+                        "dt_s": round(dt, 3),
+                        "probe_label": probe["label"],
+                        "ping_src": probe["src"],
+                        "ping_dst": probe["dst"],
+                        **probe_stats,
+                    }
+                    probe_rows.append(probe_row)
+                    probe_writer.writerow(probe_row)
+
+                ping_stats = aggregate_probe_stats(probe_rows)
 
                 util_values = [row["_util_pct_num"] for row in interval_rows if isinstance(row["_util_pct_num"], (int, float))]
                 network_mlu_pct = round(max(util_values), 3) if util_values else ""
@@ -945,6 +1141,65 @@ def main() -> None:
                 wide_writer.writerow(wide_row)
                 long_f.flush()
                 wide_f.flush()
+                probe_f.flush()
+
+                policy_seq_val = runtime_state.get("policy_seq", 0)
+                try:
+                    policy_seq_num = int(float(policy_seq_val))
+                except Exception:
+                    policy_seq_num = 0
+                prev_policy_seq_val = prev_runtime_state.get("policy_seq", 0)
+                try:
+                    prev_policy_seq_num = int(float(prev_policy_seq_val))
+                except Exception:
+                    prev_policy_seq_num = 0
+
+                controller_epoch_val = runtime_state.get("controller_epoch_s", "")
+                controller_lag_s: Any = ""
+                try:
+                    controller_epoch_num = float(controller_epoch_val)
+                    if controller_epoch_num > 0:
+                        controller_lag_s = round(time.time() - controller_epoch_num, 3)
+                except Exception:
+                    controller_lag_s = ""
+
+                control_row = {
+                    "timestamp": ts,
+                    "wall_time_epoch_ms": wall_time_epoch_ms,
+                    "sample_id": sample_id,
+                    "experiment_id": args.experiment_id,
+                    "elapsed_s": round(elapsed, 3),
+                    "dt_s": round(dt, 3),
+                    "state_read_ok": state_read_ok,
+                    "mode": runtime_state.get("mode", args.mode),
+                    "traffic_profile": runtime_state.get("traffic_profile", args.traffic_profile),
+                    "active_policy": runtime_state.get("active_policy", args.active_policy),
+                    "policy_id": runtime_state.get("policy_id", "unknown"),
+                    "candidate_path_id": runtime_state.get("candidate_path_id", "unknown"),
+                    "policy_seq": runtime_state.get("policy_seq", 0),
+                    "decision_id": runtime_state.get("decision_id", "none"),
+                    "reroute_event": runtime_state.get("reroute_event", 0),
+                    "cooldown_active": runtime_state.get("cooldown_active", 0),
+                    "event": runtime_state.get("event", "none"),
+                    "event_ts": runtime_state.get("event_ts", ""),
+                    "cooldown_until": runtime_state.get("cooldown_until", ""),
+                    "elephant_path_hint": runtime_state.get("elephant_path_hint", "unknown"),
+                    "elephant_flow_id": runtime_state.get("elephant_flow_id", "unknown"),
+                    "elephant_topk_rank": runtime_state.get("elephant_topk_rank", ""),
+                    "ingress_node": runtime_state.get("ingress_node", "unknown"),
+                    "segment_list": runtime_state.get("segment_list", ""),
+                    "controller_epoch_s": runtime_state.get("controller_epoch_s", ""),
+                    "gain_mlu_pct": runtime_state.get("gain_mlu_pct", ""),
+                    "gain_rtt_ms": runtime_state.get("gain_rtt_ms", ""),
+                    "policy_seq_delta": policy_seq_num - prev_policy_seq_num,
+                    "policy_changed": 1 if runtime_state.get("policy_id", "") != prev_runtime_state.get("policy_id", "") else 0,
+                    "decision_changed": 1 if runtime_state.get("decision_id", "") != prev_runtime_state.get("decision_id", "") else 0,
+                    "path_changed": 1 if runtime_state.get("candidate_path_id", "") != prev_runtime_state.get("candidate_path_id", "") else 0,
+                    "controller_lag_s": controller_lag_s,
+                }
+                control_writer.writerow(control_row)
+                control_f.flush()
+                prev_runtime_state = dict(runtime_state)
 
                 rtt_avg = ping_stats.get("ping_rtt_avg_ms")
                 rtt_p95 = ping_stats.get("ping_rtt_p95_ms")

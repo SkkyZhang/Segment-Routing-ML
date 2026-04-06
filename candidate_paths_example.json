@@ -1,26 +1,44 @@
 {
-  "igp_shortest": {
+  "upper_corridor": {
     "interfaces": [
-      "clab-srte4-r1:eth2",
-      "clab-srte4-r3:eth2"
+      "clab-srte8-r1:eth1",
+      "clab-srte8-r2:eth2",
+      "clab-srte8-r3:eth2",
+      "clab-srte8-r4:eth2"
     ],
     "segment_list": "",
-    "description": "Current IGP shortest path, likely via r3 branch"
+    "description": "Top corridor from r1 to r8 via r2-r3-r4"
   },
-  "path_a": {
+  "lower_corridor": {
     "interfaces": [
-      "clab-srte4-r1:eth1",
-      "clab-srte4-r2:eth2"
+      "clab-srte8-r1:eth2",
+      "clab-srte8-r5:eth2",
+      "clab-srte8-r6:eth2",
+      "clab-srte8-r7:eth2"
     ],
-    "segment_list": "16002|16004",
-    "description": "Alternative SR-TE path via r2 branch"
+    "segment_list": "16005|16006|16007|16008",
+    "description": "Bottom corridor from r1 to r8 via r5-r6-r7"
   },
-  "path_b": {
+  "cross_path": {
     "interfaces": [
-      "clab-srte4-r1:eth2",
-      "clab-srte4-r3:eth2"
+      "clab-srte8-r1:eth1",
+      "clab-srte8-r2:eth2",
+      "clab-srte8-r3:eth3",
+      "clab-srte8-r6:eth2",
+      "clab-srte8-r7:eth2"
     ],
-    "segment_list": "16003|16004",
-    "description": "SR-TE path via r3 branch"
+    "segment_list": "16002|16003|16006|16007|16008",
+    "description": "Hybrid path using the middle cross link between r3 and r6"
+  },
+  "cross_path_reverse": {
+    "interfaces": [
+      "clab-srte8-r1:eth2",
+      "clab-srte8-r5:eth2",
+      "clab-srte8-r6:eth3",
+      "clab-srte8-r3:eth2",
+      "clab-srte8-r4:eth2"
+    ],
+    "segment_list": "16005|16006|16003|16004|16008",
+    "description": "Hybrid path using the middle cross link from the lower corridor back to the upper corridor"
   }
 }

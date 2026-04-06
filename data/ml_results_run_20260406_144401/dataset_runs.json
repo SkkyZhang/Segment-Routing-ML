@@ -1,0 +1,47 @@
+[
+  {
+    "run_key": "20260406_110810",
+    "telemetry_path": "data/telemetry_wide_20260406_110810.csv",
+    "probe_rtt_path": "data/probe_rtt_20260406_110810.csv",
+    "control_overhead_path": "data/control_overhead_20260406_110810.csv",
+    "traffic_events_path": "",
+    "traffic_flow_intervals_path": "",
+    "topk_elephants_path": "",
+    "topk_elephant_windows_path": "",
+    "manifest_path": "",
+    "rows": 664,
+    "horizon_steps": {
+      "60": 22
+    }
+  },
+  {
+    "run_key": "20260406_114036",
+    "telemetry_path": "data/telemetry_wide_20260406_114036.csv",
+    "probe_rtt_path": "data/probe_rtt_20260406_114036.csv",
+    "control_overhead_path": "data/control_overhead_20260406_114036.csv",
+    "traffic_events_path": "",
+    "traffic_flow_intervals_path": "",
+    "topk_elephants_path": "",
+    "topk_elephant_windows_path": "",
+    "manifest_path": "",
+    "rows": 621,
+    "horizon_steps": {
+      "60": 21
+    }
+  },
+  {
+    "run_key": "20260406_121117",
+    "telemetry_path": "data/telemetry_wide_20260406_121117.csv",
+    "probe_rtt_path": "data/probe_rtt_20260406_121117.csv",
+    "control_overhead_path": "data/control_overhead_20260406_121117.csv",
+    "traffic_events_path": "",
+    "traffic_flow_intervals_path": "",
+    "topk_elephants_path": "",
+    "topk_elephant_windows_path": "",
+    "manifest_path": "",
+    "rows": 604,
+    "horizon_steps": {
+      "60": 21
+    }
+  }
+]

@@ -4,14 +4,18 @@
 This script is designed for the data layout produced by the collector / traffic
 scripts in this conversation:
 - telemetry_wide_*.csv
+- probe_rtt_*.csv
+- control_overhead_*.csv
 - traffic_events_*.csv
 - traffic_flow_intervals_*.csv (optional)
+- topk_elephants_*.csv (optional)
+- topk_elephant_windows_*.csv (optional)
 - traffic_manifest_*.json (optional)
 
 What it does:
 1. Auto-discovers runs from a data directory.
 2. Builds one aligned time-series dataset per run.
-3. Creates future targets such as network_mlu_pct at +60 seconds by default.
+3. Creates future targets such as network_mlu_pct at +300/+600/+900 seconds by default.
 4. Trains time-aware regression models (default: XGBoost if available).
 5. Writes cleaned datasets, metrics, predictions, fitted models, and plots.
 """
@@ -51,8 +55,12 @@ TIMESTAMP_RE = re.compile(r"(\d{8}_\d{6})")
 class RunBundle:
     run_key: str
     telemetry_path: Path
+    probe_rtt_path: Optional[Path] = None
+    control_overhead_path: Optional[Path] = None
     traffic_events_path: Optional[Path] = None
     traffic_flow_intervals_path: Optional[Path] = None
+    topk_elephants_path: Optional[Path] = None
+    topk_elephant_windows_path: Optional[Path] = None
     manifest_path: Optional[Path] = None
 
 
@@ -69,8 +77,8 @@ def parse_args() -> argparse.Namespace:
         "--horizons",
         nargs="+",
         type=int,
-        default=[60],
-        help="Forecast horizons in seconds (default: 60)",
+        default=[300, 600, 900],
+        help="Forecast horizons in seconds (default: 300 600 900)",
     )
     parser.add_argument(
         "--model",
@@ -146,8 +154,12 @@ def discover_runs(data_dir: Path, max_runs: int = 0) -> List[RunBundle]:
         bundles[run_key] = RunBundle(run_key=run_key, telemetry_path=tp)
 
     for pattern, attr in [
+        ("probe_rtt_*.csv", "probe_rtt_path"),
+        ("control_overhead_*.csv", "control_overhead_path"),
         ("traffic_events_*.csv", "traffic_events_path"),
         ("traffic_flow_intervals_*.csv", "traffic_flow_intervals_path"),
+        ("topk_elephants_*.csv", "topk_elephants_path"),
+        ("topk_elephant_windows_*.csv", "topk_elephant_windows_path"),
         ("traffic_manifest_*.json", "manifest_path"),
     ]:
         for p in sorted(data_dir.glob(pattern)):
@@ -228,10 +240,24 @@ def choose_key_signal_columns(df: pd.DataFrame, target_col: str) -> List[str]:
         "ping_rtt_p95_ms",
         "ping_rtt_p99_ms",
         "ping_loss_pct",
+        "probe__ping_rtt_avg_ms_mean",
+        "probe__ping_rtt_p95_ms_max",
+        "probe__ping_rtt_p99_ms_max",
+        "probe__ping_loss_pct_mean",
+        "probe__probe_success_ratio_mean",
         "reroute_event",
         "cooldown_active",
-        "gain_mlu_pct",
-        "gain_rtt_ms",
+        "control__policy_seq_delta",
+        "control__policy_changed",
+        "control__path_changed",
+        "control__controller_lag_s",
+        "topk_window__elephant_flow_count",
+        "topk_window__top1_share_pct",
+        "topk_window__topk_share_pct",
+        "topk_window__total_elephant_mbits",
+        "topk_detail__top1_flow_share_pct",
+        "topk_detail__top1_throughput_mbps_mean",
+        "topk_detail__top2_flow_share_pct",
     ]
     existing = [c for c in preferred if c in df.columns]
 
@@ -244,6 +270,10 @@ def choose_key_signal_columns(df: pd.DataFrame, target_col: str) -> List[str]:
     existing.extend(tx_cols[:8])
     existing.extend(backlog_cols[:4])
     existing.extend(drop_cols[:4])
+    existing.extend([c for c in df.columns if c.startswith("probe__")][:12])
+    existing.extend([c for c in df.columns if c.startswith("control__")][:12])
+    existing.extend([c for c in df.columns if c.startswith("topk_window__")][:12])
+    existing.extend([c for c in df.columns if c.startswith("topk_detail__")][:16])
 
     deduped: List[str] = []
     seen = set()
@@ -261,19 +291,22 @@ def add_lag_and_rolling_features(
     rolling_windows: Sequence[int],
 ) -> pd.DataFrame:
     out = df.copy()
+    generated: Dict[str, pd.Series] = {}
     for col in key_cols:
         if col not in out.columns:
             continue
         if not pd.api.types.is_numeric_dtype(out[col]):
             continue
         for lag in lags:
-            out[f"{col}__lag_{lag}"] = out[col].shift(lag)
+            generated[f"{col}__lag_{lag}"] = out[col].shift(lag)
         for win in rolling_windows:
             roll = out[col].rolling(win, min_periods=max(1, win // 2))
-            out[f"{col}__roll_mean_{win}"] = roll.mean()
-            out[f"{col}__roll_std_{win}"] = roll.std()
-            out[f"{col}__roll_min_{win}"] = roll.min()
-            out[f"{col}__roll_max_{win}"] = roll.max()
+            generated[f"{col}__roll_mean_{win}"] = roll.mean()
+            generated[f"{col}__roll_std_{win}"] = roll.std()
+            generated[f"{col}__roll_min_{win}"] = roll.min()
+            generated[f"{col}__roll_max_{win}"] = roll.max()
+    if generated:
+        out = pd.concat([out, pd.DataFrame(generated, index=out.index)], axis=1)
     return out
 
 
@@ -397,6 +430,156 @@ def aggregate_traffic_events(
     return out
 
 
+def aggregate_probe_metrics(probe_df: pd.DataFrame) -> pd.DataFrame:
+    if probe_df.empty or "timestamp" not in probe_df.columns:
+        return pd.DataFrame()
+
+    work = probe_df.copy()
+    work["timestamp"] = to_datetime_series(work["timestamp"])
+    work = work.dropna(subset=["timestamp"])
+    if work.empty:
+        return pd.DataFrame()
+
+    work = safe_numeric(work)
+    rows: List[Dict[str, Any]] = []
+    for ts, group in work.groupby("timestamp", sort=True):
+        item: Dict[str, Any] = {"timestamp": ts}
+        item["probe__probe_count"] = int(group["probe_label"].nunique()) if "probe_label" in group.columns else int(len(group))
+        for col in [
+            "ping_ok",
+            "ping_cmd_ok",
+            "ping_loss_pct",
+            "ping_rtt_min_ms",
+            "ping_rtt_avg_ms",
+            "ping_rtt_max_ms",
+            "ping_rtt_mdev_ms",
+            "ping_rtt_p50_ms",
+            "ping_rtt_p95_ms",
+            "ping_rtt_p99_ms",
+        ]:
+            if col not in group.columns:
+                continue
+            vals = pd.to_numeric(group[col], errors="coerce").dropna()
+            if vals.empty:
+                continue
+            item[f"probe__{col}_mean"] = float(vals.mean())
+            item[f"probe__{col}_max"] = float(vals.max())
+        if "ping_ok" in group.columns:
+            vals = pd.to_numeric(group["ping_ok"], errors="coerce").dropna()
+            if not vals.empty:
+                item["probe__probe_success_ratio_mean"] = float(vals.mean())
+                item["probe__probe_success_count_sum"] = float(vals.sum())
+        rows.append(item)
+    return pd.DataFrame(rows).sort_values("timestamp").reset_index(drop=True)
+
+
+def aggregate_control_metrics(control_df: pd.DataFrame) -> pd.DataFrame:
+    if control_df.empty or "timestamp" not in control_df.columns:
+        return pd.DataFrame()
+
+    work = control_df.copy()
+    work["timestamp"] = to_datetime_series(work["timestamp"])
+    work = work.dropna(subset=["timestamp"]).sort_values("timestamp")
+    if work.empty:
+        return pd.DataFrame()
+
+    work = safe_numeric(work)
+    keep_cols = [
+        "timestamp",
+        "policy_seq_delta",
+        "policy_changed",
+        "decision_changed",
+        "path_changed",
+        "controller_lag_s",
+    ]
+    existing = [c for c in keep_cols if c in work.columns]
+    out = work[existing].drop_duplicates(subset=["timestamp"], keep="last").copy()
+    rename_map = {c: f"control__{c}" for c in out.columns if c != "timestamp"}
+    return out.rename(columns=rename_map).reset_index(drop=True)
+
+
+def aggregate_topk_details(topk_df: pd.DataFrame, keep_ranks: int = 3) -> pd.DataFrame:
+    if topk_df.empty or "window_start_ts" not in topk_df.columns or "window_end_ts" not in topk_df.columns:
+        return pd.DataFrame()
+
+    work = topk_df.copy()
+    work["window_start_ts"] = to_datetime_series(work["window_start_ts"])
+    work["window_end_ts"] = to_datetime_series(work["window_end_ts"])
+    work = work.dropna(subset=["window_start_ts", "window_end_ts"])
+    if work.empty:
+        return pd.DataFrame()
+    work = safe_numeric(work)
+
+    rows: List[Dict[str, Any]] = []
+    group_cols = ["window_start_ts", "window_end_ts", "window_index"]
+    present_group_cols = [c for c in group_cols if c in work.columns]
+    for keys, group in work.groupby(present_group_cols, sort=True):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        key_map = dict(zip(present_group_cols, keys))
+        row: Dict[str, Any] = {
+            "window_start_ts": key_map["window_start_ts"],
+            "window_end_ts": key_map["window_end_ts"],
+        }
+        row["unique_candidate_path_count"] = int(group["start_candidate_path_id"].astype(str).nunique()) if "start_candidate_path_id" in group.columns else 0
+        row["unique_elephant_count"] = int(group["event_id"].astype(str).nunique()) if "event_id" in group.columns else int(len(group))
+
+        for rank in range(1, keep_ranks + 1):
+            sub = group[pd.to_numeric(group.get("rank"), errors="coerce") == rank] if "rank" in group.columns else pd.DataFrame()
+            if sub.empty:
+                continue
+            first = sub.iloc[0]
+            for src, dst in [
+                ("flow_share_pct", f"top{rank}_flow_share_pct"),
+                ("throughput_mbps_mean", f"top{rank}_throughput_mbps_mean"),
+                ("throughput_mbps_peak", f"top{rank}_throughput_mbps_peak"),
+                ("transferred_mbits", f"top{rank}_transferred_mbits"),
+                ("start_candidate_path_id", f"top{rank}_candidate_path_id"),
+                ("start_active_policy", f"top{rank}_active_policy"),
+            ]:
+                if src in first.index:
+                    row[dst] = first[src]
+        rows.append(row)
+    return pd.DataFrame(rows).sort_values("window_start_ts").reset_index(drop=True)
+
+
+def align_window_metrics(
+    telemetry_df: pd.DataFrame,
+    window_df: pd.DataFrame,
+    prefix: str,
+) -> pd.DataFrame:
+    if window_df.empty or "window_start_ts" not in window_df.columns or "window_end_ts" not in window_df.columns:
+        return pd.DataFrame(index=telemetry_df.index)
+
+    out = pd.DataFrame(index=telemetry_df.index)
+    ts = telemetry_df["timestamp"]
+    for _, row in window_df.iterrows():
+        start_ts = row["window_start_ts"]
+        end_ts = row["window_end_ts"]
+        mask = (ts >= start_ts) & (ts < end_ts)
+        if not mask.any():
+            continue
+        for col in window_df.columns:
+            if col in {"window_start_ts", "window_end_ts"}:
+                continue
+            out.loc[mask, f"{prefix}__{col}"] = row[col]
+    return out
+
+
+def merge_asof_metrics(
+    telemetry_df: pd.DataFrame,
+    metric_df: pd.DataFrame,
+) -> pd.DataFrame:
+    if metric_df.empty or "timestamp" not in metric_df.columns:
+        return pd.DataFrame(index=telemetry_df.index)
+
+    left = telemetry_df[["timestamp"]].copy().sort_values("timestamp")
+    right = metric_df.sort_values("timestamp").copy()
+    merged = pd.merge_asof(left, right, on="timestamp", direction="nearest", tolerance=pd.Timedelta(seconds=2))
+    merged.index = left.index
+    return merged.drop(columns=["timestamp"], errors="ignore")
+
+
 def standardize_traffic_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     rename_map = {}
@@ -440,6 +623,16 @@ def build_run_dataset(
     telemetry = add_time_features(telemetry)
 
     if merge_traffic:
+        probe_rtt = read_csv_safe(bundle.probe_rtt_path)
+        if probe_rtt is not None and not probe_rtt.empty:
+            probe_metrics = aggregate_probe_metrics(probe_rtt)
+            telemetry = pd.concat([telemetry, merge_asof_metrics(telemetry, probe_metrics)], axis=1)
+
+        control_overhead = read_csv_safe(bundle.control_overhead_path)
+        if control_overhead is not None and not control_overhead.empty:
+            control_metrics = aggregate_control_metrics(control_overhead)
+            telemetry = pd.concat([telemetry, merge_asof_metrics(telemetry, control_metrics)], axis=1)
+
         traffic_events = read_csv_safe(bundle.traffic_events_path)
         if traffic_events is not None and not traffic_events.empty:
             traffic_events = standardize_traffic_columns(traffic_events)
@@ -452,6 +645,18 @@ def build_run_dataset(
             agg_intervals = aggregate_traffic_events(telemetry, flow_intervals, prefix="intervals")
             telemetry = pd.concat([telemetry, agg_intervals], axis=1)
 
+        topk_windows = read_csv_safe(bundle.topk_elephant_windows_path)
+        if topk_windows is not None and not topk_windows.empty:
+            topk_windows["window_start_ts"] = to_datetime_series(topk_windows["window_start_ts"])
+            topk_windows["window_end_ts"] = to_datetime_series(topk_windows["window_end_ts"])
+            topk_windows = safe_numeric(topk_windows)
+            telemetry = pd.concat([telemetry, align_window_metrics(telemetry, topk_windows, prefix="topk_window")], axis=1)
+
+        topk_elephants = read_csv_safe(bundle.topk_elephants_path)
+        if topk_elephants is not None and not topk_elephants.empty:
+            topk_detail = aggregate_topk_details(topk_elephants)
+            telemetry = pd.concat([telemetry, align_window_metrics(telemetry, topk_detail, prefix="topk_detail")], axis=1)
+
     key_signal_cols = choose_key_signal_columns(telemetry, target_col=target_col)
     telemetry = add_lag_and_rolling_features(
         telemetry,
@@ -463,16 +668,24 @@ def build_run_dataset(
 
     telemetry["run_key"] = bundle.run_key
     telemetry["source_telemetry_file"] = bundle.telemetry_path.name
+    telemetry["source_probe_file"] = bundle.probe_rtt_path.name if bundle.probe_rtt_path else ""
+    telemetry["source_control_file"] = bundle.control_overhead_path.name if bundle.control_overhead_path else ""
     telemetry["source_events_file"] = bundle.traffic_events_path.name if bundle.traffic_events_path else ""
     telemetry["source_intervals_file"] = (
         bundle.traffic_flow_intervals_path.name if bundle.traffic_flow_intervals_path else ""
     )
+    telemetry["source_topk_file"] = bundle.topk_elephants_path.name if bundle.topk_elephants_path else ""
+    telemetry["source_topk_windows_file"] = bundle.topk_elephant_windows_path.name if bundle.topk_elephant_windows_path else ""
 
     meta = {
         "run_key": bundle.run_key,
         "telemetry_path": str(bundle.telemetry_path),
+        "probe_rtt_path": str(bundle.probe_rtt_path) if bundle.probe_rtt_path else "",
+        "control_overhead_path": str(bundle.control_overhead_path) if bundle.control_overhead_path else "",
         "traffic_events_path": str(bundle.traffic_events_path) if bundle.traffic_events_path else "",
         "traffic_flow_intervals_path": str(bundle.traffic_flow_intervals_path) if bundle.traffic_flow_intervals_path else "",
+        "topk_elephants_path": str(bundle.topk_elephants_path) if bundle.topk_elephants_path else "",
+        "topk_elephant_windows_path": str(bundle.topk_elephant_windows_path) if bundle.topk_elephant_windows_path else "",
         "manifest_path": str(bundle.manifest_path) if bundle.manifest_path else "",
         "rows": int(len(telemetry)),
         "horizon_steps": horizon_steps,
@@ -508,11 +721,14 @@ def choose_model(kind: str, random_state: int = 42):
         if not HAS_XGBOOST:
             raise RuntimeError("xgboost is not installed; use --model hist_gbm or random_forest")
         model = XGBRegressor(
-            n_estimators=300,
-            max_depth=6,
+            n_estimators=200,
+            max_depth=4,
             learning_rate=0.05,
-            subsample=0.9,
-            colsample_bytree=0.9,
+            subsample=0.8,
+            colsample_bytree=0.7,
+            min_child_weight=4,
+            reg_alpha=0.2,
+            reg_lambda=2.0,
             objective="reg:squarederror",
             random_state=random_state,
             n_jobs=4,
@@ -531,8 +747,10 @@ def choose_model(kind: str, random_state: int = 42):
     if kind == "hist_gbm":
         return kind, HistGradientBoostingRegressor(
             learning_rate=0.05,
-            max_depth=8,
-            max_iter=300,
+            max_depth=5,
+            max_iter=250,
+            min_samples_leaf=20,
+            l2_regularization=0.5,
             random_state=random_state,
         )
 
@@ -583,7 +801,51 @@ def clean_feature_matrix(df: pd.DataFrame, target_column: str) -> pd.DataFrame:
         "wall_time_epoch_ms",
         "sample_id",
     }
-    return df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore").copy()
+    out = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore").copy()
+    leak_prefixes = (
+        "target_",
+        "gain_",
+    )
+    leak_exact = {
+        "run_key",
+        "experiment_id",
+        "policy_id",
+        "decision_id",
+        "event",
+        "event_ts",
+        "cooldown_until",
+        "elephant_flow_id",
+        "segment_list",
+        "ping_rtts_ms",
+    }
+    leak_cols = [
+        c for c in out.columns
+        if c in leak_exact
+        or c.startswith("source_")
+        or any(c.startswith(prefix) for prefix in leak_prefixes)
+    ]
+    if leak_cols:
+        out = out.drop(columns=leak_cols, errors="ignore")
+    return out
+
+
+def select_usable_feature_columns(X_train: pd.DataFrame) -> List[str]:
+    usable: List[str] = []
+    for col in X_train.columns:
+        series = X_train[col]
+        if series.notna().sum() == 0:
+            continue
+        if pd.api.types.is_numeric_dtype(series):
+            observed = pd.to_numeric(series, errors="coerce").dropna()
+            if observed.nunique() <= 1:
+                continue
+        else:
+            observed = series.astype(str).str.strip()
+            observed = observed[observed.ne("")]
+            if observed.nunique() <= 1:
+                continue
+        usable.append(col)
+    return usable
 
 
 def top_feature_importances(pipeline: Pipeline, top_k: int = 20) -> List[Dict[str, Any]]:
@@ -631,6 +893,37 @@ def save_metrics_plot(metrics_df: pd.DataFrame, output_dir: Path) -> None:
     plt.close(fig)
 
 
+def save_grouped_metrics_plots(grouped_metrics_df: pd.DataFrame, output_dir: Path) -> None:
+    if grouped_metrics_df.empty:
+        return
+
+    for group_by in sorted(grouped_metrics_df["group_by"].dropna().unique()):
+        subset = grouped_metrics_df[grouped_metrics_df["group_by"] == group_by].copy()
+        if subset.empty:
+            continue
+        subset["group_value"] = subset["group_value"].fillna("").replace("", "unknown")
+        for metric in ["mae", "rmse", "r2"]:
+            pivot = subset.pivot_table(
+                index="horizon_s",
+                columns="group_value",
+                values=metric,
+                aggfunc="mean",
+            ).sort_index()
+            if pivot.empty:
+                continue
+            fig, ax = plt.subplots(figsize=(9, 5))
+            for column in pivot.columns:
+                ax.plot(pivot.index, pivot[column], marker="o", label=str(column))
+            ax.set_xlabel("Horizon (s)")
+            ax.set_ylabel(metric.upper())
+            ax.set_title(f"{metric.upper()} by horizon and {group_by}")
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+            fig.tight_layout()
+            fig.savefig(output_dir / f"{metric}_by_{group_by}.png", dpi=160)
+            plt.close(fig)
+
+
 def save_scatter_plot(preds: pd.DataFrame, horizon: int, output_dir: Path, max_points: int) -> None:
     if preds.empty:
         return
@@ -646,6 +939,32 @@ def save_scatter_plot(preds: pd.DataFrame, horizon: int, output_dir: Path, max_p
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(output_dir / f"pred_scatter_{horizon}s.png", dpi=160)
+    plt.close(fig)
+
+
+def save_scatter_plot_by_mode(preds: pd.DataFrame, horizon: int, output_dir: Path, max_points: int) -> None:
+    if preds.empty or "mode" not in preds.columns:
+        return
+    plot_df = sample_for_plot(preds, max_points)
+    modes = [m for m in sorted(plot_df["mode"].dropna().unique()) if str(m).strip()]
+    if not modes:
+        return
+    fig, ax = plt.subplots(figsize=(7, 6))
+    for mode in modes:
+        group = plot_df[plot_df["mode"] == mode]
+        if group.empty:
+            continue
+        ax.scatter(group["y_true"], group["y_pred"], s=20, alpha=0.6, label=str(mode))
+    lo = min(plot_df["y_true"].min(), plot_df["y_pred"].min())
+    hi = max(plot_df["y_true"].max(), plot_df["y_pred"].max())
+    ax.plot([lo, hi], [lo, hi], linestyle="--", color="black", alpha=0.7)
+    ax.set_xlabel("True")
+    ax.set_ylabel("Predicted")
+    ax.set_title(f"Actual vs predicted by mode ({horizon}s)")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_dir / f"pred_scatter_{horizon}s_by_mode.png", dpi=160)
     plt.close(fig)
 
 
@@ -668,6 +987,33 @@ def save_timeseries_plot(preds: pd.DataFrame, horizon: int, output_dir: Path, ma
     plt.close(fig)
 
 
+def save_timeseries_plot_by_mode(preds: pd.DataFrame, horizon: int, output_dir: Path, max_points: int) -> None:
+    if preds.empty or "mode" not in preds.columns:
+        return
+    valid_modes = [m for m in sorted(preds["mode"].dropna().unique()) if str(m).strip()]
+    if not valid_modes:
+        return
+    fig, axes = plt.subplots(len(valid_modes), 1, figsize=(12, max(4, 3.5 * len(valid_modes))), sharex=True)
+    if len(valid_modes) == 1:
+        axes = [axes]
+    for ax, mode in zip(axes, valid_modes):
+        group = preds[preds["mode"] == mode].sort_values("timestamp").copy()
+        group = sample_for_plot(group, max_points)
+        if group.empty:
+            continue
+        ax.plot(group["timestamp"], group["y_true"], label="true")
+        ax.plot(group["timestamp"], group["y_pred"], label="pred")
+        ax.set_title(f"{mode} ({horizon}s)")
+        ax.set_ylabel("Target")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+    axes[-1].set_xlabel("Timestamp")
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(output_dir / f"pred_timeseries_{horizon}s_by_mode.png", dpi=160)
+    plt.close(fig)
+
+
 def save_residual_hist(preds: pd.DataFrame, horizon: int, output_dir: Path, max_points: int) -> None:
     if preds.empty:
         return
@@ -680,6 +1026,31 @@ def save_residual_hist(preds: pd.DataFrame, horizon: int, output_dir: Path, max_
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(output_dir / f"pred_residual_hist_{horizon}s.png", dpi=160)
+    plt.close(fig)
+
+
+def save_residual_boxplot_by_mode(preds: pd.DataFrame, horizon: int, output_dir: Path, max_points: int) -> None:
+    if preds.empty or "mode" not in preds.columns:
+        return
+    plot_df = sample_for_plot(preds, max_points)
+    groups: List[np.ndarray] = []
+    labels: List[str] = []
+    for mode in sorted(plot_df["mode"].dropna().unique()):
+        group = pd.to_numeric(plot_df.loc[plot_df["mode"] == mode, "error"], errors="coerce").dropna()
+        if group.empty:
+            continue
+        groups.append(group.to_numpy())
+        labels.append(str(mode))
+    if not groups:
+        return
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.boxplot(groups, tick_labels=labels, showfliers=False)
+    ax.set_xlabel("Mode")
+    ax.set_ylabel("Prediction error")
+    ax.set_title(f"Residuals by mode ({horizon}s)")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(output_dir / f"pred_residual_box_{horizon}s_by_mode.png", dpi=160)
     plt.close(fig)
 
 
@@ -714,6 +1085,95 @@ def save_per_run_timeseries(preds: pd.DataFrame, horizon: int, output_dir: Path,
         fig.tight_layout()
         fig.savefig(output_dir / f"pred_timeseries_{horizon}s_run_{run_key}.png", dpi=160)
         plt.close(fig)
+
+
+def summarize_group_metrics(
+    preds: pd.DataFrame,
+    group_col: str,
+    horizon: int,
+    model_name: str,
+    target_col: str,
+) -> pd.DataFrame:
+    if preds.empty or group_col not in preds.columns:
+        return pd.DataFrame()
+
+    rows: List[Dict[str, Any]] = []
+    for group_value, group in preds.groupby(group_col, dropna=False):
+        if len(group) < 2:
+            continue
+        y_true = pd.to_numeric(group["y_true"], errors="coerce").to_numpy()
+        y_pred = pd.to_numeric(group["y_pred"], errors="coerce").to_numpy()
+        valid = np.isfinite(y_true) & np.isfinite(y_pred)
+        if valid.sum() < 2:
+            continue
+        rows.append(
+            {
+                "group_by": group_col,
+                "group_value": "" if pd.isna(group_value) else str(group_value),
+                "model": model_name,
+                "horizon_s": horizon,
+                "target": target_col,
+                "rows": int(valid.sum()),
+                "mae": float(mean_absolute_error(y_true[valid], y_pred[valid])),
+                "rmse": rmse(y_true[valid], y_pred[valid]),
+                "r2": float(r2_score(y_true[valid], y_pred[valid])),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def train_with_optional_auto_selection(
+    requested_model: str,
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    X_val: Optional[pd.DataFrame],
+    y_val: Optional[np.ndarray],
+) -> Tuple[str, Pipeline, List[str], List[str], Dict[str, float]]:
+    val_available = (
+        X_val is not None
+        and y_val is not None
+        and len(X_val) > 0
+        and len(y_val) > 0
+    )
+
+    if requested_model != "auto":
+        model_name, pipeline, numeric_cols, categorical_cols = build_pipeline(X_train, requested_model)
+        pipeline.fit(X_train, y_train)
+        model_meta: Dict[str, float] = {}
+        if val_available:
+            val_pred = pipeline.predict(X_val)
+            model_meta["selected_val_rmse"] = rmse(y_val, val_pred)
+        return model_name, pipeline, numeric_cols, categorical_cols, model_meta
+
+    candidate_kinds = ["hist_gbm"]
+    if HAS_XGBOOST:
+        candidate_kinds.insert(0, "xgboost")
+
+    if not val_available:
+        chosen_kind = candidate_kinds[0]
+        model_name, pipeline, numeric_cols, categorical_cols = build_pipeline(X_train, chosen_kind)
+        pipeline.fit(X_train, y_train)
+        return model_name, pipeline, numeric_cols, categorical_cols, {}
+
+    best_kind = ""
+    best_score = float("inf")
+    candidate_scores: Dict[str, float] = {}
+    for kind in candidate_kinds:
+        model_name, pipeline, _, _ = build_pipeline(X_train, kind)
+        pipeline.fit(X_train, y_train)
+        val_pred = pipeline.predict(X_val)
+        score = rmse(y_val, val_pred)
+        candidate_scores[f"val_rmse_{model_name}"] = score
+        if score < best_score:
+            best_score = score
+            best_kind = model_name
+
+    X_fit = pd.concat([X_train, X_val], axis=0)
+    y_fit = np.concatenate([y_train, y_val])
+    model_name, pipeline, numeric_cols, categorical_cols = build_pipeline(X_fit, best_kind)
+    pipeline.fit(X_fit, y_fit)
+    candidate_scores["selected_val_rmse"] = best_score
+    return model_name, pipeline, numeric_cols, categorical_cols, candidate_scores
 
 
 def main() -> None:
@@ -769,6 +1229,7 @@ def main() -> None:
 
     metrics_rows: List[Dict[str, Any]] = []
     all_predictions: List[pd.DataFrame] = []
+    grouped_metric_frames: List[pd.DataFrame] = []
 
     for horizon in args.horizons:
         target_name = f"target_{args.target_col}_{horizon}s"
@@ -792,12 +1253,27 @@ def main() -> None:
         y_val = pd.to_numeric(val_df[target_name], errors="coerce").to_numpy() if X_val is not None else None
         y_test = pd.to_numeric(test_df[target_name], errors="coerce").to_numpy()
 
-        model_name, pipeline, numeric_cols, categorical_cols = build_pipeline(X_train, args.model)
+        usable_cols = select_usable_feature_columns(X_train)
+        if not usable_cols:
+            print(f"[WARN] No usable features after cleaning for horizon {horizon}s")
+            continue
+        X_train = X_train[usable_cols].copy()
+        X_test = X_test.reindex(columns=usable_cols).copy()
+        if X_val is not None:
+            X_val = X_val.reindex(columns=usable_cols).copy()
+
+        model_name, pipeline, numeric_cols, categorical_cols, model_meta = train_with_optional_auto_selection(
+            requested_model=args.model,
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+        )
         print(
             f"[INFO] Training {model_name} for horizon={horizon}s "
-            f"with {len(X_train)} train / {len(X_test)} test rows"
+            f"with {len(X_train)} train / {len(X_test)} test rows "
+            f"and {len(usable_cols)} usable features"
         )
-        pipeline.fit(X_train, y_train)
 
         train_pred = pipeline.predict(X_train)
         test_pred = pipeline.predict(X_test)
@@ -819,6 +1295,7 @@ def main() -> None:
             "test_rmse": rmse(y_test, test_pred),
             "test_r2": float(r2_score(y_test, test_pred)),
         }
+        metrics.update(model_meta)
         if y_val is not None and len(y_val):
             metrics["val_mae"] = float(mean_absolute_error(y_val, val_pred))
             metrics["val_rmse"] = rmse(y_val, val_pred)
@@ -832,6 +1309,10 @@ def main() -> None:
         preds["y_pred"] = test_pred
         preds["error"] = preds["y_pred"] - preds["y_true"]
         all_predictions.append(preds)
+        for group_col in ["mode", "active_policy", "run_key"]:
+            group_df = summarize_group_metrics(preds, group_col, horizon, model_name, args.target_col)
+            if not group_df.empty:
+                grouped_metric_frames.append(group_df)
 
         model_path = output_dir / f"model_{args.target_col}_{horizon}s.joblib"
         joblib.dump(pipeline, model_path)
@@ -843,8 +1324,11 @@ def main() -> None:
         save_feature_importance_plot(importance, horizon, output_dir)
 
         save_scatter_plot(preds, horizon, output_dir, args.max_plot_points)
+        save_scatter_plot_by_mode(preds, horizon, output_dir, args.max_plot_points)
         save_timeseries_plot(preds, horizon, output_dir, args.max_plot_points)
+        save_timeseries_plot_by_mode(preds, horizon, output_dir, args.max_plot_points)
         save_residual_hist(preds, horizon, output_dir, args.max_plot_points)
+        save_residual_boxplot_by_mode(preds, horizon, output_dir, args.max_plot_points)
         save_per_run_timeseries(preds, horizon, output_dir, args.max_plot_points)
 
     if not metrics_rows:
@@ -864,9 +1348,21 @@ def main() -> None:
         pred_df.to_csv(pred_path, index=False)
         print(f"[INFO] Saved test predictions to {pred_path}")
 
+    if grouped_metric_frames:
+        grouped_metrics_df = pd.concat(grouped_metric_frames, ignore_index=True)
+        grouped_metrics_path = output_dir / "metrics_by_group.csv"
+        grouped_metrics_df.to_csv(grouped_metrics_path, index=False)
+        print(f"[INFO] Saved grouped metrics to {grouped_metrics_path}")
+        save_grouped_metrics_plots(grouped_metrics_df, output_dir)
+
     summary = metrics_df[["horizon_s", "model", "test_mae", "test_rmse", "test_r2"]].sort_values("horizon_s")
     print("\n=== Test metrics summary ===")
     print(summary.to_string(index=False))
+    if grouped_metric_frames:
+        mode_summary = grouped_metrics_df[grouped_metrics_df["group_by"] == "mode"].sort_values(["horizon_s", "group_value"])
+        if not mode_summary.empty:
+            print("\n=== Test metrics by mode ===")
+            print(mode_summary[["horizon_s", "group_value", "rows", "mae", "rmse", "r2"]].to_string(index=False))
     print(f"[INFO] Plots saved under {output_dir}")
 
 
